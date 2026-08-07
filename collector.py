@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-대산에프앤비 경락 데이터 수집기 v2.0 (GitHub Actions용)
+대산에프앤비 경락 데이터 수집기 v2.1 (GitHub Actions용)
 [v2.0] 사내 검증 레시피 채택: pigGrade 응답의 '등외제외' 집계행 c_1101eTotAmt
        = 축평원 공식 전국(탕박·등외제외) — 사내 경락 리포트와 동일 값 보장.
        + 시장별(이름 매핑)·권역별·대표가격 수집, 최근 7일 재수집, 공휴일 API.
+[v2.1] 2023-01-01부터 전 기간 백필(누락일만 수집) + 월간/주간 평균 사전계산 탑재
+       → 판가 4주전·냉동계산기 월별지육가·리포트가 이 파일 하나로 해결.
 """
 import os, json, datetime, urllib.request, xml.etree.ElementTree as ET
 from datetime import timedelta
@@ -11,7 +13,7 @@ from pathlib import Path
 
 KEY = os.environ.get("EKAPE_KEY", "").strip()
 BASE = "http://data.ekape.or.kr/openapi-data/service/user/grade/auct"
-FETCH_DAYS = int(os.environ.get("FETCH_DAYS", "20"))   # 신규 수집 범위(영업일)
+START_DATE = os.environ.get("START_DATE", "20230101")  # 이 날짜부터 전 영업일 백필
 RECHECK_DAYS = 7                                        # 확정치 소급 반영 재수집
 MARKETS = {  # 사내 검증 매핑
     "0320": ("도드람", "수도권"), "0302": ("협신식품", "수도권"), "1301": ("삼성식품", "수도권"),
@@ -63,6 +65,16 @@ def workdays_back(n, hol):
             out.append(d.strftime("%Y%m%d"))
     return list(reversed(out))
 
+def workdays_since(start, hol):
+    out = []
+    d = datetime.datetime.strptime(start, "%Y%m%d").date()
+    end = datetime.date.today() - timedelta(days=1)
+    while d <= end:
+        if d.weekday() < 5 and d.strftime("%Y%m%d") not in hol:
+            out.append(d.strftime("%Y%m%d"))
+        d += timedelta(days=1)
+    return out
+
 def fetch_day(ymd):
     """(전국_등외제외, 시장별dict) — 사내 검증 레시피"""
     try:
@@ -89,10 +101,10 @@ def main():
     for k in ("daily", "markets", "regional", "representative"): data.setdefault(k, {})
     data["basis"] = "축평원 pigGrade '등외제외' 공식 집계 (탕박·등외제외 전국) — 사내 리포트와 동일 원천"
     hol = load_holidays()
-    days = workdays_back(FETCH_DAYS, hol)
+    days = workdays_since(START_DATE, hol)
     recheck = set(workdays_back(RECHECK_DAYS, hol))
     todo = [d for d in days if d not in data["daily"] or d in recheck]
-    print(f"수집: {len(todo)}건 (신규+최근{RECHECK_DAYS}일 재확인)")
+    print(f"수집: {len(todo)}건 (백필 {START_DATE}~ 누락분 + 최근 {RECHECK_DAYS}일 재확인)")
 
     for ymd in todo:
         nat, mk = fetch_day(ymd)
@@ -100,7 +112,7 @@ def main():
             data["daily"][ymd] = nat
             if mk: data["markets"][ymd] = mk
 
-    for ymd in todo:                                   # 권역별 (참고)
+    for ymd in [d for d in todo if d in recheck]:      # 권역별 (참고, 최근분만)
         try:
             root = api("pigApperence", baseYmd=ymd)
             regs = {}
@@ -121,13 +133,22 @@ def main():
     except Exception as e:
         print(f"대표가격 실패: {e}")
 
+    # 월간/주간 평균 사전계산 (냉동계산기 월별지육가·리포트·4주전 계산용)
+    monthly, weekly = {}, {}
+    for ymd, v in data["daily"].items():
+        monthly.setdefault(ymd[:6], []).append(v)
+        dt = datetime.datetime.strptime(ymd, "%Y%m%d").date()
+        wk = (dt - timedelta(days=dt.weekday())).strftime("%Y%m%d")   # 그 주 월요일
+        weekly.setdefault(wk, []).append(v)
+    data["monthly"] = {k: round(sum(v)/len(v)) for k, v in sorted(monthly.items())}
+    data["weekly"] = {k: round(sum(v)/len(v)) for k, v in sorted(weekly.items())}
     data["updated"] = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     data["daily"] = dict(sorted(data["daily"].items()))
     p.write_text(json.dumps(data, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print("\n── 최근 전국(탕박·등외제외) — 사내 리포트와 동일해야 정상 ──")
     for k in sorted(data["daily"])[-5:]:
         print(f"  {k}: {data['daily'][k]:,}원")
-    print(f"\n저장: 일별 {len(data['daily'])} · 시장 {len(data['markets'])} · 권역 {len(data['regional'])} · 대표 {len(data['representative'])}")
+    print(f"\n저장: 일별 {len(data['daily'])} · 월평균 {len(data['monthly'])} · 주평균 {len(data['weekly'])} · 시장 {len(data['markets'])} · 대표 {len(data['representative'])}")
 
 if __name__ == "__main__":
     main()
