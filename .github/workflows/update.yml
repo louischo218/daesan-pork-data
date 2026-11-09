@@ -2,7 +2,8 @@ name: 경락 데이터 자동 수집
 
 on:
   schedule:
-    - cron: '30 0 * * 1-5'   # 평일 오전 9:30 (한국시간)
+    - cron: '0 13 * * 1-5'   # 평일 밤 10시 (한국시간) — 그날 경락까지 수집 → 다음 날 아침 PC 동기화(09:40)에 전날 값이 들어감
+    - cron: '30 0 * * 1-5'   # 평일 오전 9:30 (한국시간) — 예비. GitHub 예약 지연으로 실제로는 오후에 도는 경우가 많음
   workflow_dispatch:
 
 jobs:
@@ -24,6 +25,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data.json
-          git diff --cached --quiet || git commit -m "경락 데이터 갱신 $(date +'%Y-%m-%d')"
+          git diff --cached --quiet || git commit -m "경락 데이터 갱신 $(TZ=Asia/Seoul date +'%Y-%m-%d %H:%M') KST"
           git pull --rebase origin main || true
           git push

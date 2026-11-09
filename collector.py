@@ -15,6 +15,10 @@ KEY = os.environ.get("EKAPE_KEY", "").strip()
 BASE = "http://data.ekape.or.kr/openapi-data/service/user/grade/auct"
 START_DATE = os.environ.get("START_DATE", "20230101")  # 이 날짜부터 전 영업일 백필
 RECHECK_DAYS = 7                                        # 확정치 소급 반영 재수집
+KST = datetime.timezone(timedelta(hours=9))             # 러너는 UTC — 날짜는 항상 한국시간(서머타임 없음)으로 판단
+
+def today_kst():
+    return datetime.datetime.now(KST).date()
 MARKETS = {  # 사내 검증 매핑
     "0320": ("도드람", "수도권"), "0302": ("협신식품", "수도권"), "1301": ("삼성식품", "수도권"),
     "0323": ("농협부천", "수도권"), "1005": ("김해축공", "영남권"), "0202": ("부경축공", "영남권"),
@@ -45,7 +49,7 @@ def num(s):
 
 def load_holidays():
     hol = set(HOLIDAYS_FALLBACK)
-    y = datetime.date.today().year
+    y = today_kst().year
     for yr in (y, y + 1):
         try:
             raw = call(f"http://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo"
@@ -58,7 +62,7 @@ def load_holidays():
     return hol
 
 def workdays_back(n, hol):
-    out, d = [], datetime.date.today()
+    out, d = [], today_kst()
     while len(out) < n:
         d -= timedelta(days=1)
         if d.weekday() < 5 and d.strftime("%Y%m%d") not in hol:
@@ -68,7 +72,7 @@ def workdays_back(n, hol):
 def workdays_since(start, hol):
     out = []
     d = datetime.datetime.strptime(start, "%Y%m%d").date()
-    end = datetime.date.today() - timedelta(days=1)
+    end = today_kst()     # 당일까지 (밤 10시 실행이면 그날 경락이 들어감; 아직 없으면 0 이라 건너뛰고 다음 실행에서 채움)
     while d <= end:
         if d.weekday() < 5 and d.strftime("%Y%m%d") not in hol:
             out.append(d.strftime("%Y%m%d"))
